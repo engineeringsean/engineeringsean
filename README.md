@@ -24,12 +24,12 @@ Key Features:
 - Large-scale sorting and ranking of stocks based on financial metricsData visualization (charts, graphs, pivot tables)
 
 Tech Stack:
-Python - webscraping and data engineering
-React.js - building responsive UI
-Handsontable - interactive Excel grid
-SheetJS - writing Excel files in browser
-FastAPI - handling API requests
-PostgreSQL - storing historical stock data and user preferences
+- Python - webscraping and data engineering
+- React.js - building responsive UI
+- Handsontable - interactive Excel grid
+- SheetJS - writing Excel files in browser
+- FastAPI - handling API requests
+- PostgreSQL - storing historical stock data and user preferences
 
 
 
