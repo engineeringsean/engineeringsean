@@ -12,10 +12,10 @@ P.S.
 I am currently working on this project below and plan to upload it here within a few weeks:
 
 Project Description:
-A financial data and analysis platform that integrates real-time or historical financial statements into an interactive web-based spreadsheet (Excel or similar). This platform allows users to conduct in-depth financial analysis, compare stock performance, and rank market data based on customizable criteria.
+- A financial data and analysis platform that integrates real-time or historical financial statements into an interactive web-based spreadsheet (Excel or similar). This platform allows users to conduct in-depth financial analysis, compare stock performance, and rank market data based on customizable criteria.
 
 Project Classification: 
-Fintech Web Application / Financial Analysis Platform
+- Fintech Web Application / Financial Analysis Platform
 
 Key Features:
 - Stock ticker search and data retrieval
