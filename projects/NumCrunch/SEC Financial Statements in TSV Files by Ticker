@@ -1,0 +1,504 @@
+import os
+import csv
+import time
+import datetime
+import base64
+import webbrowser
+from pathlib import Path
+from io import StringIO
+
+import pandas as pd
+import requests
+from tqdm import tqdm
+from loguru import logger
+
+"""
+The purpose of this script is to create a data pipeline
+which transforms SEC Financial Statement Data Sets into
+highly searchable Tab-Separated-Value (TSV) files. These
+TSV files can be used to programmatically calculate historical
+and current financial KPIs from any public company registered with 
+the SEC.
+
+The original SEC Financial Statement Data Sets are fragmented sets
+of numerical information from public company filings, with
+information scattered across filings in chronological order.
+The numerical filings come with no ticker symbols (AAPL etc.),
+form types (10-K or 10-Q), or stock prices at the time of filings.
+
+With the resulting TSV files, the user can search for any
+company's financial filing using the company's ticker symbol,
+and calculate any financial KPI using reported financial metrics
+and the quoted stock price at the time of the financial filing.
+"""
+
+# =============================================================================
+# CONFIGURATION & PATHS
+# =============================================================================
+
+# -- Directories --
+ROOT_DIR = r"C:\sec_data\Filings By Date"  # where the original num.tsv and sub.tsv files reside
+OUTPUT_DIR = r"C:\sec_data\Data Engineering TSV Files"  # folder for intermediate files
+
+# Intermediate combined file paths
+COMBINED_NUM_PATH = os.path.join(OUTPUT_DIR, "combined_num.tsv")
+COMBINED_SUB_PATH = os.path.join(OUTPUT_DIR, "combined_sub.tsv")
+UPDATED_COMBINED_NUM_PATH = os.path.join(OUTPUT_DIR, "updated_combined_num.tsv")
+
+# Directories for per-ticker files
+TICKER_SPLIT_DIR = os.path.join(OUTPUT_DIR, "Ticker_Split")
+TICKER_PRICE_DIR = os.path.join(OUTPUT_DIR, "Ticker_With_Price")
+FINAL_TICKER_DIR = os.path.join(OUTPUT_DIR, "Final_Ticker_Files")
+
+# -- Schwab API OAuth config --
+CONFIG_FILE = r"C:\sec_data\Charles Schwab API Config.txt"
+
+# =============================================================================
+# STEP 1: COMBINE NUM.TSV FILES (KEEPING ONLY SELECTED COLUMNS)
+# =============================================================================
+
+def combine_num_files(root_dir, output_file, selected_columns, na_fill_value=None):
+    combined_df = pd.DataFrame()
+    file_paths = []
+
+    # Walk through directories to collect num.tsv file paths
+    for subdir, _, files in os.walk(root_dir):
+        for file in files:
+            if file == "num.tsv":
+                file_paths.append(os.path.join(subdir, file))
+
+    if not file_paths:
+        print(f"No num.tsv files found in {root_dir}")
+        return
+
+    for file_path in tqdm(file_paths, desc="Combining num.tsv files"):
+        try:
+            df = pd.read_csv(file_path, sep='\t', dtype=str, low_memory=False)
+            # Select only the desired columns that exist in this file
+            available_cols = [col for col in selected_columns if col in df.columns]
+            df = df[available_cols]
+            if na_fill_value is not None:
+                df = df.fillna(na_fill_value)
+            combined_df = pd.concat([combined_df, df], ignore_index=True)
+        except Exception as e:
+            print(f"Error reading {file_path}: {e}")
+
+    combined_df.to_csv(output_file, sep='\t', index=False)
+    print(f"Combined num.tsv file saved to: {output_file}")
+
+# =============================================================================
+# STEP 2: COMBINE SUB.TSV FILES AND ADD TICKER COLUMN VIA SEC TICKER MAPPING
+# =============================================================================
+
+def combine_sub_files(root_dir, output_file, na_fill_value=None):
+    combined_df = pd.DataFrame()
+    file_paths = []
+
+    # Walk through directories to collect sub.tsv file paths
+    for subdir, _, files in os.walk(root_dir):
+        for file in files:
+            if file == "sub.tsv":
+                file_paths.append(os.path.join(subdir, file))
+
+    if not file_paths:
+        print(f"No sub.tsv files found in {root_dir}")
+        return
+
+    for file_path in tqdm(file_paths, desc="Combining sub.tsv files"):
+        try:
+            df = pd.read_csv(file_path, sep='\t', dtype=str, low_memory=False)
+            if na_fill_value is not None:
+                df = df.fillna(na_fill_value)
+            combined_df = pd.concat([combined_df, df], ignore_index=True)
+        except Exception as e:
+            print(f"Error reading {file_path}: {e}")
+
+    # Get SEC ticker mapping (cik to ticker)
+    tickers_url = 'https://www.sec.gov/include/ticker.txt'
+    headers = {
+        'User-Agent': 'Sample Company Name AdminContact@samplecompany.com',
+        'Accept-Encoding': 'gzip, deflate',
+        'Host': 'www.sec.gov'
+    }
+    response = requests.get(tickers_url, headers=headers)
+    tickers = pd.read_csv(StringIO(response.text), delimiter='\t', header=None)
+    tickers.columns = ['ticker', 'cik']
+
+    # Ensure the cik columns are strings and merge
+    combined_df['cik'] = combined_df['cik'].astype(str)
+    tickers['cik'] = tickers['cik'].astype(str)
+    merged_df = combined_df.merge(tickers, on='cik', how='left')
+
+    # Reorder to place 'ticker' first and select only the needed columns.
+    desired_columns = ["adsh", "ticker", "form", "cik", "filed"]
+    merged_df = merged_df[[col for col in desired_columns if col in merged_df.columns]]
+    merged_df.to_csv(output_file, sep='\t', index=False)
+    print(f"Combined sub.tsv file (with ticker) saved to: {output_file}")
+
+# =============================================================================
+# STEP 3: MERGE COMBINED SUB INTO COMBINED NUM (JOIN ON 'adsh')
+# =============================================================================
+
+def merge_num_and_sub(num_file, sub_file, output_file):
+    # Read only necessary columns from sub file
+    sub_df = pd.read_csv(sub_file, sep='\t', usecols=["adsh", "ticker", "form", "cik", "filed"], low_memory=False)
+    chunk_size = 10**5  # adjust based on system memory
+    first_chunk = True
+
+    with open(output_file, 'w', encoding='utf-8') as out_f:
+        for chunk in tqdm(pd.read_csv(num_file, sep='\t', chunksize=chunk_size, low_memory=False), 
+                          desc="Merging num and sub files", unit="chunk"):
+            merged_chunk = chunk.merge(sub_df, on='adsh', how='left')
+            # Reorder columns: put ticker, form, cik first, then the rest
+            cols = ['ticker', 'form', 'cik'] + [col for col in merged_chunk.columns if col not in ['ticker', 'form', 'cik']]
+            merged_chunk = merged_chunk[cols]
+            merged_chunk.to_csv(out_f, sep='\t', index=False, header=first_chunk, mode='a')
+            first_chunk = False
+    print(f"Updated combined num.tsv (merged with sub) saved to: {output_file}")
+
+# =============================================================================
+# STEP 4: SPLIT THE UPDATED COMBINED NUM FILE INTO PER-TICKER FILES
+# =============================================================================
+
+def split_updated_num(updated_num_file, output_dir):
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    # Count total rows for progress bar
+    with open(updated_num_file, 'r', encoding='utf-8') as infile:
+        total_lines = sum(1 for _ in infile) - 1  # subtract header
+
+    with open(updated_num_file, 'r', newline='', encoding='utf-8') as infile:
+        reader = csv.DictReader(infile, delimiter='\t')
+        header = reader.fieldnames
+
+        for row in tqdm(reader, total=total_lines, desc="Splitting by ticker", unit="row"):
+            ticker = row.get('ticker', '').strip()
+            if not ticker:
+                continue
+            file_path = os.path.join(output_dir, f"{ticker}.tsv")
+            file_exists = os.path.exists(file_path)
+            with open(file_path, 'a' if file_exists else 'w', newline='', encoding='utf-8') as outfile:
+                writer = csv.DictWriter(outfile, fieldnames=header, delimiter='\t')
+                if not file_exists:
+                    writer.writeheader()
+                writer.writerow(row)
+    print(f"Ticker files saved to: {output_dir}")
+
+# =============================================================================
+# OAUTH & PRICE RETRIEVAL FUNCTIONS FOR THE CHARLES SCHWAB API
+# =============================================================================
+
+# Global variables for OAuth/token handling
+LAST_CALL_TIME = 0.0
+MIN_TIME_BETWEEN_CALLS = 60.0 / 110  # ~0.55 seconds between calls
+TOKEN_REFRESH_INTERVAL = 1740  # seconds (29 minutes)
+
+OAUTH_AUTHORIZE_URL = "https://api.schwabapi.com/v1/oauth/authorize"
+OAUTH_TOKEN_URL = "https://api.schwabapi.com/v1/oauth/token"
+
+APP_KEY = None
+APP_SECRET = None
+REDIRECT_URI = None
+ACCESS_TOKEN = None
+REFRESH_TOKEN = None
+LAST_TOKEN_TIME = None  # as datetime.datetime
+
+def load_config(file_path: str) -> None:
+    global APP_KEY, APP_SECRET, REDIRECT_URI, ACCESS_TOKEN, REFRESH_TOKEN, LAST_TOKEN_TIME
+    if not os.path.exists(file_path):
+        logger.warning(f"Config file not found at {file_path}. Creating a new one.")
+        _create_blank_config(file_path)
+    with open(file_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    config_map = {}
+    for line in lines:
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        config_map[key.strip()] = val.strip()
+    APP_KEY = config_map.get("APP_KEY", "")
+    APP_SECRET = config_map.get("APP_SECRET", "")
+    REDIRECT_URI = config_map.get("REDIRECT_URI", "")
+    ACCESS_TOKEN = config_map.get("ACCESS_TOKEN", "")
+    REFRESH_TOKEN = config_map.get("REFRESH_TOKEN", "")
+    last_token_time_str = config_map.get("LAST_TOKEN_TIME", "")
+    if last_token_time_str:
+        try:
+            LAST_TOKEN_TIME = datetime.datetime.fromisoformat(last_token_time_str)
+        except ValueError:
+            LAST_TOKEN_TIME = None
+    else:
+        LAST_TOKEN_TIME = None
+
+def save_config(file_path: str) -> None:
+    global APP_KEY, APP_SECRET, REDIRECT_URI, ACCESS_TOKEN, REFRESH_TOKEN, LAST_TOKEN_TIME
+    lines = [
+        f"APP_KEY={APP_KEY}\n",
+        f"APP_SECRET={APP_SECRET}\n",
+        f"REDIRECT_URI={REDIRECT_URI}\n",
+        f"ACCESS_TOKEN={ACCESS_TOKEN}\n",
+        f"REFRESH_TOKEN={REFRESH_TOKEN}\n",
+        f"LAST_TOKEN_TIME={LAST_TOKEN_TIME.isoformat() if LAST_TOKEN_TIME else ''}\n"
+    ]
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+def _create_blank_config(file_path: str):
+    skeleton = (
+        "APP_KEY=\n"
+        "APP_SECRET=\n"
+        "REDIRECT_URI=\n"
+        "ACCESS_TOKEN=\n"
+        "REFRESH_TOKEN=\n"
+        "LAST_TOKEN_TIME=\n"
+    )
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(skeleton)
+
+def init_auth():
+    global APP_KEY, APP_SECRET, REDIRECT_URI, ACCESS_TOKEN, REFRESH_TOKEN, LAST_TOKEN_TIME
+    auth_url = f"{OAUTH_AUTHORIZE_URL}?client_id={APP_KEY}&redirect_uri={REDIRECT_URI}"
+    logger.info("Opening browser for Schwab authentication...")
+    logger.info(f"URL:\n{auth_url}")
+    webbrowser.open(auth_url)
+    logger.info("Paste the ENTIRE redirect URL from your browser:")
+    returned_url = input("Redirect URL: ").strip()
+    if "code=" not in returned_url:
+        logger.error("No 'code=' found in the returned URL. Aborting.")
+        raise SystemExit("Invalid redirect URL.")
+    # Extract the code substring from the URL
+    code_str = f"{returned_url[returned_url.index('code=') + 5 : returned_url.index('%40')]}@"
+    logger.info(f"Retrieved code: {code_str}")
+    credentials = f"{APP_KEY}:{APP_SECRET}"
+    base64_credentials = base64.b64encode(credentials.encode("utf-8")).decode("utf-8")
+    headers = {
+        "Authorization": f"Basic {base64_credentials}",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    payload = {
+        "grant_type": "authorization_code",
+        "code": code_str,
+        "redirect_uri": REDIRECT_URI,
+    }
+    logger.info("Requesting initial tokens from Schwab...")
+    response = requests.post(OAUTH_TOKEN_URL, headers=headers, data=payload)
+    if response.status_code != 200:
+        logger.error(f"Initial token request failed: {response.text}")
+        raise SystemExit("Failed to retrieve tokens.")
+    token_json = response.json()
+    ACCESS_TOKEN = token_json["access_token"]
+    REFRESH_TOKEN = token_json["refresh_token"]
+    LAST_TOKEN_TIME = datetime.datetime.now()
+    logger.info("Successfully retrieved tokens.")
+    save_config(CONFIG_FILE)
+
+def refresh_tokens():
+    global APP_KEY, APP_SECRET, ACCESS_TOKEN, REFRESH_TOKEN, LAST_TOKEN_TIME
+    logger.info("Refreshing Schwab tokens...")
+    credentials = f"{APP_KEY}:{APP_SECRET}"
+    base64_credentials = base64.b64encode(credentials.encode()).decode("utf-8")
+    headers = {
+        "Authorization": f"Basic {base64_credentials}",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    payload = {
+        "grant_type": "refresh_token",
+        "refresh_token": REFRESH_TOKEN,
+    }
+    response = requests.post(OAUTH_TOKEN_URL, headers=headers, data=payload)
+    if response.status_code == 200:
+        tokens_dict = response.json()
+        ACCESS_TOKEN = tokens_dict["access_token"]
+        REFRESH_TOKEN = tokens_dict["refresh_token"]
+        LAST_TOKEN_TIME = datetime.datetime.now()
+        logger.info("Token successfully refreshed.")
+        save_config(CONFIG_FILE)
+    else:
+        logger.error(f"Error refreshing token: {response.status_code} {response.text}")
+        raise SystemExit("Token refresh failed.")
+
+def get_bearer_token() -> str:
+    global ACCESS_TOKEN, REFRESH_TOKEN, LAST_TOKEN_TIME
+    if not ACCESS_TOKEN:
+        if not REFRESH_TOKEN:
+            init_auth()
+        else:
+            refresh_tokens()
+        return ACCESS_TOKEN
+    elapsed_seconds = (datetime.datetime.now() - LAST_TOKEN_TIME).total_seconds() if LAST_TOKEN_TIME else 0
+    if elapsed_seconds > TOKEN_REFRESH_INTERVAL:
+        refresh_tokens()
+    return ACCESS_TOKEN
+
+def _make_schwab_api_call(params):
+    global LAST_CALL_TIME
+    elapsed = time.time() - LAST_CALL_TIME
+    if elapsed < MIN_TIME_BETWEEN_CALLS:
+        time.sleep(MIN_TIME_BETWEEN_CALLS - elapsed)
+    token = get_bearer_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+    ticker = params["symbol"]
+    date_unix_ms = params["date"]
+    # Construct the endpoint (adjust the URL/parameters as needed for your use case)
+    PRICE_ENDPOINT = (
+        f"https://api.schwabapi.com/marketdata/v1/pricehistory?"
+        f"symbol={ticker}&periodType=month&frequencyType=daily"
+        f"&startDate={date_unix_ms}&endDate={date_unix_ms}"
+    )
+    LAST_CALL_TIME = time.time()
+    resp = requests.get(PRICE_ENDPOINT, headers=headers)
+    resp.raise_for_status()
+    return resp.json()
+
+def get_price_for_date(ticker, date_after_filed_datetime):
+    """
+    Attempts to retrieve the historical price for the given ticker and date.
+    If a 400 error is returned (e.g. no data for that day), it will try the next day.
+    """
+    for attempt in range(6):
+        date_unix_ms = int(date_after_filed_datetime.timestamp() * 1000)
+        params = {"symbol": ticker.upper(), "date": date_unix_ms}
+        try:
+            data_json = _make_schwab_api_call(params)
+            # Get price on filed date
+            price = data_json["candles"][0]["close"]
+            return price
+        except requests.exceptions.HTTPError as http_err:
+            if http_err.response.status_code == 400:
+                logger.warning(f"[Attempt {attempt+1}/6] 400 error for {ticker} on {date_after_filed_datetime.strftime('%Y-%m-%d')}. Trying next day...")
+                date_after_filed_datetime += datetime.timedelta(days=1)
+                continue
+            else:
+                raise
+        except KeyError:
+            logger.error(f"Response JSON missing expected fields for {ticker} on {date_after_filed_datetime.strftime('%Y-%m-%d')}.")
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching price for {ticker}: {e}")
+            return None
+    logger.error(f"All attempts failed for {ticker}. Returning None.")
+    return None
+
+# =============================================================================
+# STEP 5: PROCESS TICKER FILES TO ADD PRICE INFORMATION FROM SCHWAB API
+# =============================================================================
+
+def add_price_to_files(input_dir, output_dir):
+    """
+    For each ticker file in input_dir, look up the price for the day after the
+    filing date (in the 'filed' column) via the Schwab API and write a new file
+    with an added 'price' column to output_dir.
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    tsv_files = sorted([f for f in os.listdir(input_dir) if f.lower().endswith('.tsv')])
+    
+    # Calculate total rows for progress reporting
+    total_rows = 0
+    for f in tsv_files:
+        try:
+            df = pd.read_csv(os.path.join(input_dir, f), sep='\t', low_memory=False)
+            total_rows += len(df)
+        except Exception:
+            continue
+
+    with tqdm(total=total_rows, desc="Adding price to ticker files") as pbar:
+        for file in tsv_files:
+            ticker = file[:-4]  # remove '.tsv'
+            in_path = os.path.join(input_dir, file)
+            out_path = os.path.join(output_dir, file)
+            df = pd.read_csv(in_path, sep='\t')
+            if 'filed' not in df.columns:
+                logger.warning(f"Skipping {file}: no 'filed' column found.")
+                pbar.update(len(df))
+                continue
+            unique_dates = df['filed'].unique()
+            price_map = {}
+            for date_str in unique_dates:
+                try:
+                    # Convert filed date (assumed YYYYMMDD) to datetime and add one day
+                    date_dt = datetime.datetime.strptime(str(date_str), "%Y%m%d") + datetime.timedelta(days=1)
+                    price_map[date_str] = get_price_for_date(ticker, date_dt)
+                except Exception as e:
+                    price_map[date_str] = None
+                    logger.error(f"Error fetching price for {ticker} on {date_str}: {e}")
+            df['price'] = df['filed'].map(price_map)
+            df.to_csv(out_path, sep='\t', index=False)
+            pbar.update(len(df))
+    print(f"Ticker files with price added saved to: {output_dir}")
+
+# =============================================================================
+# STEP 6: SIMPLIFY TICKER FILES BY KEEPING ONLY THE SELECTED COLUMNS
+# =============================================================================
+
+def simplify_ticker_files(input_dir, output_dir):
+    """
+    Reads each ticker file in input_dir, keeps only the selected columns,
+    and writes the simplified file to output_dir.
+    """
+    selected_columns = ["ticker", "form", "cik", "adsh", "tag", "ddate", "qtrs", "value", "dimn", "filed", "price"]
+    column_types = {
+        "ticker": str,
+        "form": str,
+        "cik": int,
+        "adsh": str,
+        "tag": str,
+        "ddate": int,
+        "qtrs": int,
+        "value": float,
+        "dimn": int,
+        "filed": int,
+        "price": float
+    }
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    tsv_files = [f for f in os.listdir(input_dir) if f.endswith('.tsv')]
+    for filename in tqdm(tsv_files, desc="Simplifying ticker files", unit='file'):
+        ticker = filename.replace('.tsv', '')
+        file_path = os.path.join(input_dir, filename)
+        df = pd.read_csv(
+            file_path,
+            sep='\t',
+            usecols=selected_columns,
+            dtype=column_types,
+            na_values=["Unknown"]
+        )
+        output_path = os.path.join(output_dir, f"{ticker}.tsv")
+        df.to_csv(output_path, sep="\t", index=False)
+    print(f"Simplified ticker files saved to: {output_dir}")
+
+# =============================================================================
+# MAIN PIPELINE FUNCTION
+# =============================================================================
+
+def main():
+    # ---- Step 1: Combine num.tsv files (keep only num-related columns) ----
+    selected_num_columns = ["adsh", "tag", "ddate", "qtrs", "value", "dimn"]
+    combine_num_files(ROOT_DIR, COMBINED_NUM_PATH, selected_num_columns, na_fill_value=None)
+
+    # ---- Step 2: Combine sub.tsv files (and add ticker column) ----
+    combine_sub_files(ROOT_DIR, COMBINED_SUB_PATH, na_fill_value=None)
+
+    # ---- Step 3: Merge combined sub data into num data (join on 'adsh') ----
+    merge_num_and_sub(COMBINED_NUM_PATH, COMBINED_SUB_PATH, UPDATED_COMBINED_NUM_PATH)
+
+    # ---- Step 4: Split the updated combined num file into individual ticker files ----
+    split_updated_num(UPDATED_COMBINED_NUM_PATH, TICKER_SPLIT_DIR)
+
+    # ---- Step 5: Ensure Schwab API credentials are ready and add price data ----
+    load_config(CONFIG_FILE)
+    get_bearer_token()  # This will trigger OAuth if needed
+    add_price_to_files(TICKER_SPLIT_DIR, TICKER_PRICE_DIR)
+
+    # ---- Step 6: Simplify each ticker file to keep only the desired columns ----
+    simplify_ticker_files(TICKER_PRICE_DIR, FINAL_TICKER_DIR)
+
+    print("Pipeline complete!")
+    print(f"Final simplified ticker files are in: {FINAL_TICKER_DIR}")
+
+if __name__ == "__main__":
+    main()
+
