@@ -26,7 +26,7 @@ Key Features:
 Tech Stack:
 - Python - webscraping and data engineering
 - React.js - building responsive UI
-- Handsontable - interactive Excel grid
+- AG Grid - interactive Excel grid
 - SheetJS - writing Excel files in browser
 - FastAPI - handling API requests
 - PostgreSQL - storing historical stock data and user preferences
