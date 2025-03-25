@@ -3,7 +3,7 @@
 <h2>👨‍💻 Software Development Projects:</h2>
 
 - <b>Python</b>
-  - [Praciting DS & Algos in Python](https://github.com/joshmadakor1/Algorithms-Practice)
+  - [Diagonal Spread Options Scanner - Charles Schwab API in Python](https://github.com/engineeringsean/Diagonal-Spread-Options-Scanner)
 
 
 <h2> 🤳 Connect with me:</h2>
