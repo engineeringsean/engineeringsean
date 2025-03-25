@@ -1,11 +1,6 @@
 <p align="center">
-  <a href="https://github.com/engineeringsean">
-    <img src="https://user-images.githubusercontent.com/20955511/199138068-0a7b7b75-a024-4f00-803f-30a19c5d1b2d.png" alt="Sean Adams" /></a>
-</p>
-
-<p align="center">
   <!-- Typing SVG by DenverCoder1 - https://github.com/DenverCoder1/readme-typing-svg -->
-  <a href="https://git.io/typing-svg"><img src="https://readme-typing-svg.demolab.com?font=Fira+Code&pause=1000&color=1ABB2D&width=435&lines=Sean+Adams+-+Software+Engineer;Software+Engineering+Portfolio" alt="Typing SVG" /></a>
+  <a href="https://git.io/typing-svg"><img src="https://readme-typing-svg.demolab.com?font=Fira+Code&pause=1000&color=1ABB2D&center=true&width=435&lines=Sean+Adams+-+Software+Engineer;Welcome+To+My+Portfolio" alt="Typing SVG" /></a>
 </p>
 
 <!-- Social icons section -->
