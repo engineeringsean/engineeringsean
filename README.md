@@ -1,14 +1,15 @@
-<h1>Hi, I'm Sean! <br/> <a href="https://www.linkedin.com/in/iamseanadams/">Software Engineering Professional</a></h1>
+<h1>Hi, I'm Sean <br/> <a href="https://www.linkedin.com/in/iamseanadams/">Software Engineering Professional</a></h1>
 
 <h2>👨‍💻 Software Development Projects:</h2>
 
 - <b>Python</b>
+  - [Bloomberg Terminal from SEC Filings](https://github.com/engineeringsean/Bloomberg-Terminal-FA-from-SEC-Filings)
   - [Diagonal Spread Options Scanner - Charles Schwab API in Python](https://github.com/engineeringsean/Diagonal-Spread-Options-Scanner)
 
 
 <h2> 🤳 Connect with me:</h2>
 
-[<img align="left" alt="SeanAdams | LinkedIn" width="22px" src="https://cdn.jsdelivr.net/npm/simple-icons@v3/icons/linkedin.svg" />][linkedin]
+[<img align="left" alt="SeanAdams | LinkedIn" width="22px" src="https://upload.wikimedia.org/wikipedia/commons/8/81/LinkedIn_icon.svg" />][linkedin]
 
 
 [linkedin]: https://linkedin.com/in/iamseanadams
