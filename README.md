@@ -5,6 +5,10 @@
 - <b>Python</b>
   - [Bloomberg Terminal from SEC Filings](https://github.com/engineeringsean/Bloomberg-Terminal-FA-from-SEC-Filings)
   - [Diagonal Spread Options Scanner - Charles Schwab API in Python](https://github.com/engineeringsean/Diagonal-Spread-Options-Scanner)
+ 
+- <b>MATLAB</b>
+  - [The Sight Of Music - Signal Processing Project](https://github.com/engineeringsean/The-Sight-Of-Music)
+  - [Neural Network Analysis of CMR Images for Detection of Hypertrophic Cardiomyopathy](https://github.com/engineeringsean/Neural-Network-Analysis-of-CMR-Images-for-Detection-of-Hypertrophic-Cardiomyopathy-in-MATLAB)
 
 
 <h2> 🤳 Connect with me:</h2>
